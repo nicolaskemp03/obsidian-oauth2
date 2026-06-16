@@ -25,15 +25,9 @@ async function getObsidianCookie(req: NextRequest): Promise<string | null> {
   forwardHeaders.set("Content-Type", "application/json");
   forwardHeaders.set("Origin", "https://publish.obsidian.md");
   forwardHeaders.set("Referer", "https://publish.obsidian.md/");
-  // Enviar los headers reales del usuario para evitar bloqueos de Cloudflare
+  
   const userAgent = req.headers.get("user-agent");
   if (userAgent) forwardHeaders.set("User-Agent", userAgent);
-  
-  const clientIp = req.headers.get("x-forwarded-for") || req.ip || "";
-  if (clientIp) {
-    forwardHeaders.set("X-Forwarded-For", clientIp);
-    forwardHeaders.set("CF-Connecting-IP", clientIp.split(",")[0]);
-  }
 
   try {
     const res = await fetch(pwUrl, {
@@ -43,28 +37,44 @@ async function getObsidianCookie(req: NextRequest): Promise<string | null> {
     });
 
     const setCookies = res.headers.getSetCookie();
-    if (setCookies && setCookies.length > 0) {
-      // Filtrar para asegurarnos de que Obsidian realmente nos dio el token de autenticación
-      // Si solo nos dio la cookie de Cloudflare (_cf_bm), significa que la contraseña fue rechazada o Cloudflare bloqueó
-      const authCookieExists = setCookies.some(c => c.includes("publish") || c.includes("obsidian"));
-      
-      if (!authCookieExists) {
-        const bodyText = await res.text();
-        console.error(`❌ Obsidian rechazó la contraseña o Cloudflare bloqueó la IP (HTTP: ${res.status}).`);
-        console.error(`   -> Body devuelto: ${bodyText.substring(0, 500)}`);
-        return null; // Falló la autenticación
+    const bodyText = await res.text();
+    
+    // Cloudflare error
+    if (res.status === 403) {
+      console.error(`❌ Cloudflare bloqueó la IP (HTTP: ${res.status}). Body: ${bodyText.substring(0, 500)}`);
+      return null;
+    }
+
+    if (res.status === 200) {
+      console.log("✅ Obsidian devolvió 200 OK. Body devuelto:", bodyText);
+      console.log("Cookies recibidas de Obsidian:", setCookies);
+
+      // Revisar si el token viene en JSON
+      try {
+        const jsonBody = JSON.parse(bodyText);
+        if (jsonBody.token) {
+          // Si el token viene en el body, lo construimos como cookie
+          cachedObsidianCookie = `obsidian-publish-token=${jsonBody.token}; path=/`; 
+          lastCookieTime = now;
+          console.log("✅ Token extraído del JSON:", cachedObsidianCookie);
+          return cachedObsidianCookie;
+        }
+      } catch (e) {
+        // No es JSON
       }
 
-      const cookieString = setCookies.map(c => c.split(';')[0]).join('; ');
-      cachedObsidianCookie = cookieString;
-      lastCookieTime = now;
-      console.log("✅ Cookie de Obsidian renovada exitosamente:", cookieString);
-      return cachedObsidianCookie;
-    } else {
-      const bodyText = await res.text();
-      console.warn("⚠️ No se recibió Set-Cookie de Obsidian. HTTP:", res.status);
-      console.warn(`   -> Body devuelto: ${bodyText.substring(0, 500)}`);
+      // Si no, intentar usar las cookies que llegaron (incluso si no dicen 'publish' u 'obsidian')
+      if (setCookies && setCookies.length > 0) {
+        // Temporalmente aceptaremos cualquier cookie si fue un 200 OK
+        const cookieString = setCookies.map(c => c.split(';')[0]).join('; ');
+        cachedObsidianCookie = cookieString;
+        lastCookieTime = now;
+        console.log("✅ Cookie extraída de Set-Cookie (HTTP 200):", cachedObsidianCookie);
+        return cachedObsidianCookie;
+      }
     }
+
+    console.warn(`⚠️ Obsidian falló (HTTP ${res.status}). Body: ${bodyText.substring(0, 500)}`);
   } catch (error) {
     console.error("Failed to auto-renew Obsidian cookie:", error);
   }
