@@ -1,66 +1,39 @@
-import Image from "next/image";
-import styles from "./page.module.css";
+import { signIn } from "@/auth";
 
-export default function Home() {
+export default function LoginPage() {
   return (
-    <div className={styles.page}>
-      <main className={styles.main}>
-        <Image
-          className={styles.logo}
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className={styles.intro}>
-          <h1>To get started, edit the page.tsx file.</h1>
-          <p>
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', padding: '20px' }}>
+      <div className="glass-panel" style={{ maxWidth: '400px', width: '100%', padding: '40px', textAlign: 'center' }}>
+        
+        <div style={{ marginBottom: '30px' }}>
+          <div className="font-mono" style={{ fontSize: '2rem', fontWeight: 'bold' }}>
+            /<span style={{ color: 'var(--konexa-green)' }}>onexa</span>_ <span style={{ color: 'var(--konexa-mora)' }}>*</span>
+          </div>
+          <h2 style={{ fontSize: '1.2rem', marginTop: '10px', color: 'var(--konexa-cian)' }}>Docs Proxy</h2>
         </div>
-        <div className={styles.ctas}>
-          <a
-            className={styles.primary}
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className={styles.logo}
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className={styles.secondary}
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        <p style={{ marginBottom: '30px', fontSize: '0.95rem', opacity: 0.9 }}>
+          Para acceder a la documentación de Konexa, por favor inicia sesión con tu cuenta corporativa.
+        </p>
+
+        <form
+          action={async () => {
+            "use server";
+            await signIn("azure-ad", { redirectTo: "/" });
+          }}
+        >
+          <button type="submit" className="btn-konexa" style={{ width: '100%' }}>
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M11.4 24H0V12.6h11.4V24zM24 24H12.6V12.6H24V24zM11.4 11.4H0V0h11.4v11.4zm12.6 0H12.6V0H24v11.4z"/>
+            </svg>
+            Ingresar con Microsoft
+          </button>
+        </form>
+
+        <div style={{ marginTop: '40px', fontSize: '0.8rem', opacity: 0.5 }} className="font-mono">
+          Somos talento TI_
         </div>
-      </main>
+      </div>
     </div>
   );
 }
