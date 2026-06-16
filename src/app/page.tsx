@@ -30,7 +30,7 @@ export default function LoginPage() {
           </button>
         </form>
 
-        <div style={{ marginTop: '40px', fontSize: '0.8rem', color: 'var(--text-muted)' }} style={{ fontFamily: 'var(--font-mono)' }}>
+        <div style={{ marginTop: '40px', fontSize: '0.8rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
           Somos talento TI_
         </div>
       </div>
