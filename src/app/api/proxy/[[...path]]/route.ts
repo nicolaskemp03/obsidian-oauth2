@@ -11,9 +11,7 @@ async function getObsidianCookie(): Promise<string | null> {
     return cachedObsidianCookie;
   }
 
-  // Fallback a la URL base original si publish-01 no responde correctamente
-  const baseUrl = process.env.OBSIDIAN_URL || "https://publish.obsidian.md/tu-sitio";
-  const pwUrl = baseUrl.includes("publish-01") ? "https://publish-01.obsidian.md/pw" : "https://publish.obsidian.md/pw";
+  const pwUrl = "https://publish-01.obsidian.md/pw";
   
   const id = process.env.OBSIDIAN_PUBLISH_ID;
   const pw = process.env.OBSIDIAN_PASSWORD;
