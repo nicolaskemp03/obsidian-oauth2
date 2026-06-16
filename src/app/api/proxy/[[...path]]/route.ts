@@ -6,7 +6,7 @@ let lastCookieTime = 0;
 
 async function getObsidianCookie(): Promise<string | null> {
   const now = Date.now();
-  // Renovar automáticamente cada 24 horas (86400000 ms) para asegurar que la sesión nunca muera
+  // Renovar automáticamente cada 24 horas (86400000 ms)
   if (cachedObsidianCookie && (now - lastCookieTime < 86400000)) {
     return cachedObsidianCookie;
   }
@@ -15,7 +15,7 @@ async function getObsidianCookie(): Promise<string | null> {
   const id = process.env.OBSIDIAN_PUBLISH_ID;
   const pw = process.env.OBSIDIAN_PASSWORD;
 
-  // Fallback a la cookie estática si el usuario prefirió configurarlo de forma manual
+  // Fallback manual
   if (!id || !pw) {
     return process.env.OBSIDIAN_AUTH_COOKIE || null;
   }
@@ -29,19 +29,16 @@ async function getObsidianCookie(): Promise<string | null> {
       body: JSON.stringify({ id, pw }),
     });
 
-    // Obtener la cabecera Set-Cookie
-    const setCookie = res.headers.get("set-cookie");
-    if (setCookie) {
-      // Extraemos solo el "nombre=valor" ignorando flags como HttpOnly o Path=/
-      const cookieMatch = setCookie.match(/^([^;]+)/);
-      if (cookieMatch) {
-        cachedObsidianCookie = cookieMatch[1];
-        lastCookieTime = now;
-        console.log("✅ Cookie de Obsidian renovada exitosamente de forma automática.");
-        return cachedObsidianCookie;
-      }
+    // Usar getSetCookie() en lugar de get() para soportar múltiples cookies (ej: Cloudflare + Obsidian)
+    const setCookies = res.headers.getSetCookie();
+    if (setCookies && setCookies.length > 0) {
+      const cookieString = setCookies.map(c => c.split(';')[0]).join('; ');
+      cachedObsidianCookie = cookieString;
+      lastCookieTime = now;
+      console.log("✅ Cookie de Obsidian renovada exitosamente de forma automática.");
+      return cachedObsidianCookie;
     } else {
-      console.warn("⚠️ No se recibió Set-Cookie de Obsidian. Revisa las credenciales.");
+      console.warn("⚠️ No se recibió Set-Cookie de Obsidian. HTTP:", res.status);
     }
   } catch (error) {
     console.error("Failed to auto-renew Obsidian cookie:", error);
@@ -74,19 +71,41 @@ async function handleProxy(req: NextRequest, pathArray?: string[]) {
 
   const headers = new Headers();
   
-  // Obtener la cookie (del caché o renovándola automáticamente)
-  const obsidianCookie = await getObsidianCookie();
-  if (obsidianCookie) {
-    headers.set("Cookie", obsidianCookie);
-  }
+  // 1er intento: Obtener la cookie en caché (o renovar si pasaron 24hrs)
+  let obsidianCookie = await getObsidianCookie();
+  if (obsidianCookie) headers.set("Cookie", obsidianCookie);
 
   try {
-    const response = await fetch(targetUrl, {
+    let response = await fetch(targetUrl, {
       method: req.method,
       headers: headers,
       body: req.method !== 'GET' && req.method !== 'HEAD' ? req.body : undefined,
       redirect: "manual", 
     });
+
+    // Validar si la respuesta es la pantalla de contraseña (cookie expirada u obsoleta)
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("text/html")) {
+      const clonedResponse = response.clone();
+      const htmlText = await clonedResponse.text();
+      // Si Obsidian devuelve un formulario de contraseña, la sesión caducó
+      if (htmlText.includes('type="password"') || htmlText.includes('publish-password')) {
+        console.warn("⚠️ Se detectó la pantalla de contraseña. La cookie expiró. Forzando re-login...");
+        lastCookieTime = 0; // Invalidar caché
+        obsidianCookie = await getObsidianCookie();
+        
+        if (obsidianCookie) {
+          headers.set("Cookie", obsidianCookie);
+          // Reintentar la petición con la cookie fresca
+          response = await fetch(targetUrl, {
+            method: req.method,
+            headers: headers,
+            body: req.method !== 'GET' && req.method !== 'HEAD' ? req.body : undefined,
+            redirect: "manual", 
+          });
+        }
+      }
+    }
 
     const resHeaders = new Headers(response.headers);
     resHeaders.delete("content-encoding");
