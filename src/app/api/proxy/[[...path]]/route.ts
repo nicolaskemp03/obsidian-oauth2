@@ -38,7 +38,9 @@ async function getObsidianCookie(): Promise<string | null> {
       const authCookieExists = setCookies.some(c => c.includes("publish") || c.includes("obsidian"));
       
       if (!authCookieExists) {
-        console.error("❌ Obsidian rechazó la contraseña. No devolvió la cookie de sesión. Revisa tus credenciales en .env.local");
+        console.error(`❌ Obsidian rechazó la contraseña (HTTP: ${res.status}). Revisa tus credenciales en .env.local.`);
+        console.error(`   -> ID usado: "${id.substring(0, 5)}..."`);
+        console.error(`   -> PW usado: "${pw.substring(0, 3)}..."`);
         return null; // Falló la autenticación
       }
 
