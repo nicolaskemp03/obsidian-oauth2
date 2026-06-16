@@ -4,7 +4,7 @@ import { auth } from "@/auth";
 let cachedObsidianCookie: string | null = null;
 let lastCookieTime = 0;
 
-async function getObsidianCookie(): Promise<string | null> {
+async function getObsidianCookie(req: NextRequest): Promise<string | null> {
   const now = Date.now();
   // Renovar automáticamente cada 24 horas (86400000 ms)
   if (cachedObsidianCookie && (now - lastCookieTime < 86400000)) {
@@ -21,26 +21,37 @@ async function getObsidianCookie(): Promise<string | null> {
     return process.env.OBSIDIAN_AUTH_COOKIE || null;
   }
 
+  const forwardHeaders = new Headers();
+  forwardHeaders.set("Content-Type", "application/json");
+  forwardHeaders.set("Origin", "https://publish.obsidian.md");
+  forwardHeaders.set("Referer", "https://publish.obsidian.md/");
+  // Enviar los headers reales del usuario para evitar bloqueos de Cloudflare
+  const userAgent = req.headers.get("user-agent");
+  if (userAgent) forwardHeaders.set("User-Agent", userAgent);
+  
+  const clientIp = req.headers.get("x-forwarded-for") || req.ip || "";
+  if (clientIp) {
+    forwardHeaders.set("X-Forwarded-For", clientIp);
+    forwardHeaders.set("CF-Connecting-IP", clientIp.split(",")[0]);
+  }
+
   try {
     const res = await fetch(pwUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-      },
+      headers: forwardHeaders,
       body: JSON.stringify({ id, pw }),
     });
 
     const setCookies = res.headers.getSetCookie();
     if (setCookies && setCookies.length > 0) {
       // Filtrar para asegurarnos de que Obsidian realmente nos dio el token de autenticación
-      // Si solo nos dio la cookie de Cloudflare (_cf_bm), significa que la contraseña fue rechazada
+      // Si solo nos dio la cookie de Cloudflare (_cf_bm), significa que la contraseña fue rechazada o Cloudflare bloqueó
       const authCookieExists = setCookies.some(c => c.includes("publish") || c.includes("obsidian"));
       
       if (!authCookieExists) {
-        console.error(`❌ Obsidian rechazó la contraseña (HTTP: ${res.status}). Revisa tus credenciales en .env.local.`);
-        console.error(`   -> ID usado: "${id.substring(0, 5)}..."`);
-        console.error(`   -> PW usado: "${pw.substring(0, 3)}..."`);
+        const bodyText = await res.text();
+        console.error(`❌ Obsidian rechazó la contraseña o Cloudflare bloqueó la IP (HTTP: ${res.status}).`);
+        console.error(`   -> Body devuelto: ${bodyText.substring(0, 500)}`);
         return null; // Falló la autenticación
       }
 
@@ -50,7 +61,9 @@ async function getObsidianCookie(): Promise<string | null> {
       console.log("✅ Cookie de Obsidian renovada exitosamente:", cookieString);
       return cachedObsidianCookie;
     } else {
+      const bodyText = await res.text();
       console.warn("⚠️ No se recibió Set-Cookie de Obsidian. HTTP:", res.status);
+      console.warn(`   -> Body devuelto: ${bodyText.substring(0, 500)}`);
     }
   } catch (error) {
     console.error("Failed to auto-renew Obsidian cookie:", error);
@@ -93,7 +106,7 @@ async function handleProxy(req: NextRequest, pathArray?: string[]) {
   }
   
   // 1er intento: Obtener la cookie en caché (o renovar si pasaron 24hrs)
-  let obsidianCookie = await getObsidianCookie();
+  let obsidianCookie = await getObsidianCookie(req);
   if (obsidianCookie) headers.set("Cookie", obsidianCookie);
 
   try {
@@ -122,7 +135,7 @@ async function handleProxy(req: NextRequest, pathArray?: string[]) {
     if (isRedirectToPw || isHtmlPasswordForm) {
       console.warn("⚠️ Se detectó que Obsidian solicita contraseña. La cookie expiró. Forzando re-login interno...");
       lastCookieTime = 0; // Invalidar caché
-      obsidianCookie = await getObsidianCookie();
+      obsidianCookie = await getObsidianCookie(req);
       
       if (obsidianCookie) {
         headers.set("Cookie", obsidianCookie);
