@@ -1,7 +1,55 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 
-// Se permite GET y POST para manejar navegación y assets
+let cachedObsidianCookie: string | null = null;
+let lastCookieTime = 0;
+
+async function getObsidianCookie(): Promise<string | null> {
+  const now = Date.now();
+  // Renovar automáticamente cada 24 horas (86400000 ms) para asegurar que la sesión nunca muera
+  if (cachedObsidianCookie && (now - lastCookieTime < 86400000)) {
+    return cachedObsidianCookie;
+  }
+
+  const pwUrl = "https://publish-01.obsidian.md/pw";
+  const id = process.env.OBSIDIAN_PUBLISH_ID;
+  const pw = process.env.OBSIDIAN_PASSWORD;
+
+  // Fallback a la cookie estática si el usuario prefirió configurarlo de forma manual
+  if (!id || !pw) {
+    return process.env.OBSIDIAN_AUTH_COOKIE || null;
+  }
+
+  try {
+    const res = await fetch(pwUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ id, pw }),
+    });
+
+    // Obtener la cabecera Set-Cookie
+    const setCookie = res.headers.get("set-cookie");
+    if (setCookie) {
+      // Extraemos solo el "nombre=valor" ignorando flags como HttpOnly o Path=/
+      const cookieMatch = setCookie.match(/^([^;]+)/);
+      if (cookieMatch) {
+        cachedObsidianCookie = cookieMatch[1];
+        lastCookieTime = now;
+        console.log("✅ Cookie de Obsidian renovada exitosamente de forma automática.");
+        return cachedObsidianCookie;
+      }
+    } else {
+      console.warn("⚠️ No se recibió Set-Cookie de Obsidian. Revisa las credenciales.");
+    }
+  } catch (error) {
+    console.error("Failed to auto-renew Obsidian cookie:", error);
+  }
+  
+  return null;
+}
+
 export async function GET(req: NextRequest, { params }: { params: { path?: string[] } }) {
   return handleProxy(req, params.path);
 }
@@ -19,18 +67,13 @@ async function handleProxy(req: NextRequest, pathArray?: string[]) {
   const path = pathArray ? pathArray.join("/") : "";
   const queryString = req.nextUrl.search;
   
-  // URL base de Obsidian Publish. Esto debe estar en el .env
-  // Por ejemplo: https://publish.obsidian.md/serve?url=mysite
-  // O simplemente https://publish.obsidian.md/mysite
   const OBSIDIAN_URL = process.env.OBSIDIAN_URL || "https://publish.obsidian.md/tu-sitio";
   const targetUrl = `${OBSIDIAN_URL}/${path}${queryString}`;
 
-  // Headers para la petición a Obsidian
   const headers = new Headers();
   
-  // Obtener la cookie de sesión maestra desde .env
-  // En Obsidian Publish, normalmente es un token/cookie que autoriza el acceso a sitios privados.
-  const obsidianCookie = process.env.OBSIDIAN_AUTH_COOKIE;
+  // Obtener la cookie (del caché o renovándola automáticamente)
+  const obsidianCookie = await getObsidianCookie();
   if (obsidianCookie) {
     headers.set("Cookie", obsidianCookie);
   }
@@ -40,14 +83,10 @@ async function handleProxy(req: NextRequest, pathArray?: string[]) {
       method: req.method,
       headers: headers,
       body: req.method !== 'GET' && req.method !== 'HEAD' ? req.body : undefined,
-      // No seguir redirecciones ciegamente si rompen el proxy
       redirect: "manual", 
     });
 
-    // Construir la respuesta para el usuario
     const resHeaders = new Headers(response.headers);
-    
-    // Eliminar headers que causen problemas al re-enviar
     resHeaders.delete("content-encoding");
     resHeaders.delete("content-length");
     
