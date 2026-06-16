@@ -83,26 +83,44 @@ async function handleProxy(req: NextRequest, pathArray?: string[]) {
       redirect: "manual", 
     });
 
-    // Validar si la respuesta es la pantalla de contraseña (cookie expirada u obsoleta)
+    // 1. Detectar si Obsidian devuelve un 302 hacia /pw (Cookie inválida)
+    const location = response.headers.get("location") || "";
+    const isRedirectToPw = response.status === 302 && location.endsWith("/pw");
+
+    // 2. Detectar si Obsidian devuelve HTML con el formulario de contraseña (Cookie inválida)
+    let isHtmlPasswordForm = false;
     const contentType = response.headers.get("content-type") || "";
     if (contentType.includes("text/html")) {
       const clonedResponse = response.clone();
       const htmlText = await clonedResponse.text();
-      // Si Obsidian devuelve un formulario de contraseña, la sesión caducó
       if (htmlText.includes('type="password"') || htmlText.includes('publish-password')) {
-        console.warn("⚠️ Se detectó la pantalla de contraseña. La cookie expiró. Forzando re-login...");
-        lastCookieTime = 0; // Invalidar caché
-        obsidianCookie = await getObsidianCookie();
-        
-        if (obsidianCookie) {
-          headers.set("Cookie", obsidianCookie);
-          // Reintentar la petición con la cookie fresca
-          response = await fetch(targetUrl, {
-            method: req.method,
-            headers: headers,
-            body: req.method !== 'GET' && req.method !== 'HEAD' ? req.body : undefined,
-            redirect: "manual", 
-          });
+        isHtmlPasswordForm = true;
+      }
+    }
+
+    if (isRedirectToPw || isHtmlPasswordForm) {
+      console.warn("⚠️ Se detectó que Obsidian solicita contraseña. La cookie expiró. Forzando re-login interno...");
+      lastCookieTime = 0; // Invalidar caché
+      obsidianCookie = await getObsidianCookie();
+      
+      if (obsidianCookie) {
+        headers.set("Cookie", obsidianCookie);
+
+        // Si el usuario ya estaba atascado en /pw en su navegador, el targetUrl apuntará a /pw.
+        // Al re-intentar, no queremos pedirle la contraseña, queremos llevarlo al inicio.
+        const retryTarget = targetUrl.endsWith("/pw") ? OBSIDIAN_URL : targetUrl;
+
+        // Reintentar la petición con la cookie fresca
+        response = await fetch(retryTarget, {
+          method: req.method,
+          headers: headers,
+          body: req.method !== 'GET' && req.method !== 'HEAD' ? req.body : undefined,
+          redirect: "manual", 
+        });
+
+        // Si el usuario navegó a /pw (porque antes se le filtró un 302), lo redirigimos a la raíz (/)
+        if (path === "pw") {
+          return NextResponse.redirect(new URL("/", req.url));
         }
       }
     }
