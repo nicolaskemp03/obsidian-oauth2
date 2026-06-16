@@ -11,7 +11,10 @@ async function getObsidianCookie(): Promise<string | null> {
     return cachedObsidianCookie;
   }
 
-  const pwUrl = "https://publish-01.obsidian.md/pw";
+  // Fallback a la URL base original si publish-01 no responde correctamente
+  const baseUrl = process.env.OBSIDIAN_URL || "https://publish.obsidian.md/tu-sitio";
+  const pwUrl = baseUrl.includes("publish-01") ? "https://publish-01.obsidian.md/pw" : "https://publish.obsidian.md/pw";
+  
   const id = process.env.OBSIDIAN_PUBLISH_ID;
   const pw = process.env.OBSIDIAN_PASSWORD;
 
@@ -25,17 +28,26 @@ async function getObsidianCookie(): Promise<string | null> {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
       },
       body: JSON.stringify({ id, pw }),
     });
 
-    // Usar getSetCookie() en lugar de get() para soportar múltiples cookies (ej: Cloudflare + Obsidian)
     const setCookies = res.headers.getSetCookie();
     if (setCookies && setCookies.length > 0) {
+      // Filtrar para asegurarnos de que Obsidian realmente nos dio el token de autenticación
+      // Si solo nos dio la cookie de Cloudflare (_cf_bm), significa que la contraseña fue rechazada
+      const authCookieExists = setCookies.some(c => c.includes("publish") || c.includes("obsidian"));
+      
+      if (!authCookieExists) {
+        console.error("❌ Obsidian rechazó la contraseña. No devolvió la cookie de sesión. Revisa tus credenciales en .env.local");
+        return null; // Falló la autenticación
+      }
+
       const cookieString = setCookies.map(c => c.split(';')[0]).join('; ');
       cachedObsidianCookie = cookieString;
       lastCookieTime = now;
-      console.log("✅ Cookie de Obsidian renovada exitosamente de forma automática.");
+      console.log("✅ Cookie de Obsidian renovada exitosamente:", cookieString);
       return cachedObsidianCookie;
     } else {
       console.warn("⚠️ No se recibió Set-Cookie de Obsidian. HTTP:", res.status);
@@ -67,9 +79,18 @@ async function handleProxy(req: NextRequest, pathArray?: string[]) {
   const queryString = req.nextUrl.search;
   
   const OBSIDIAN_URL = process.env.OBSIDIAN_URL || "https://publish.obsidian.md/tu-sitio";
-  const targetUrl = `${OBSIDIAN_URL}/${path}${queryString}`;
+  // Si Obsidian mandó al navegador al /pw, lo interceptamos transparentemente al root
+  const cleanPath = path === "pw" ? "" : path;
+  const targetUrl = `${OBSIDIAN_URL}/${cleanPath}${queryString}`;
 
   const headers = new Headers();
+  
+  // Reenviar los headers originales del usuario (importante para evitar bloqueos de Cloudflare y SSR issues)
+  for (const [key, value] of req.headers.entries()) {
+    if (!['host', 'connection', 'cookie', 'content-length', 'referer'].includes(key.toLowerCase())) {
+      headers.set(key, value);
+    }
+  }
   
   // 1er intento: Obtener la cookie en caché (o renovar si pasaron 24hrs)
   let obsidianCookie = await getObsidianCookie();
@@ -106,22 +127,13 @@ async function handleProxy(req: NextRequest, pathArray?: string[]) {
       if (obsidianCookie) {
         headers.set("Cookie", obsidianCookie);
 
-        // Si el usuario ya estaba atascado en /pw en su navegador, el targetUrl apuntará a /pw.
-        // Al re-intentar, no queremos pedirle la contraseña, queremos llevarlo al inicio.
-        const retryTarget = targetUrl.endsWith("/pw") ? OBSIDIAN_URL : targetUrl;
-
         // Reintentar la petición con la cookie fresca
-        response = await fetch(retryTarget, {
+        response = await fetch(targetUrl, {
           method: req.method,
           headers: headers,
           body: req.method !== 'GET' && req.method !== 'HEAD' ? req.body : undefined,
           redirect: "manual", 
         });
-
-        // Si el usuario navegó a /pw (porque antes se le filtró un 302), lo redirigimos a la raíz (/)
-        if (path === "pw") {
-          return NextResponse.redirect(new URL("/", req.url));
-        }
       }
     }
 
