@@ -127,36 +127,38 @@ async function handleProxy(req: NextRequest, pathArray?: string[]) {
       redirect: "manual", 
     });
 
-    // 1. Detectar si Obsidian devuelve un 302 hacia /pw (Cookie inválida)
     const location = response.headers.get("location") || "";
     const isRedirectToPw = response.status === 302 && location.endsWith("/pw");
 
-    // 2. Detectar si Obsidian devuelve HTML con el formulario de contraseña (Cookie inválida)
     let isHtmlPasswordForm = false;
     const contentType = response.headers.get("content-type") || "";
+    let htmlText = "";
+    
     if (contentType.includes("text/html")) {
       const clonedResponse = response.clone();
-      const htmlText = await clonedResponse.text();
+      htmlText = await clonedResponse.text();
       if (htmlText.includes('type="password"') || htmlText.includes('publish-password')) {
         isHtmlPasswordForm = true;
       }
     }
 
     if (isRedirectToPw || isHtmlPasswordForm) {
-      console.warn("⚠️ Se detectó que Obsidian solicita contraseña. La cookie expiró. Forzando re-login interno...");
-      lastCookieTime = 0; // Invalidar caché
+      console.warn("⚠️ Obsidian solicita contraseña. Forzando re-login interno...");
+      lastCookieTime = 0; 
       obsidianCookie = await getObsidianCookie(req);
       
       if (obsidianCookie) {
         headers.set("Cookie", obsidianCookie);
-
-        // Reintentar la petición con la cookie fresca
         response = await fetch(targetUrl, {
           method: req.method,
           headers: headers,
           body: req.method !== 'GET' && req.method !== 'HEAD' ? req.body : undefined,
           redirect: "manual", 
         });
+        
+        if (contentType.includes("text/html")) {
+          htmlText = await response.clone().text();
+        }
       }
     }
 
@@ -164,6 +166,26 @@ async function handleProxy(req: NextRequest, pathArray?: string[]) {
     resHeaders.delete("content-encoding");
     resHeaders.delete("content-length");
     
+    // Si es HTML, inyectamos el script para desbloquear la SPA localmente en el navegador
+    if (contentType.includes("text/html") && cachedHpw && process.env.OBSIDIAN_PUBLISH_ID) {
+      const siteId = process.env.OBSIDIAN_PUBLISH_ID;
+      const script = `<script>
+        try {
+          // Obsidian Publish usa localStorage para saber si está autenticado y no mostrar el form
+          localStorage.setItem("${siteId}", "${cachedHpw}");
+          localStorage.setItem("publish-${siteId}", "${cachedHpw}");
+          document.cookie = "${siteId}=s%3A${cachedHpw}; Path=/; SameSite=Lax; max-age=86400";
+        } catch(e) { console.error("Konexa Proxy Inject Error:", e); }
+      </script>`;
+      
+      htmlText = htmlText.replace('<head>', `<head>${script}`);
+      return new NextResponse(htmlText, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: resHeaders,
+      });
+    }
+
     return new NextResponse(response.body, {
       status: response.status,
       statusText: response.statusText,
